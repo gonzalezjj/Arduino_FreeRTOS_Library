@@ -73,7 +73,7 @@
 #include <avr/sleep.h>
 #include <avr/wdt.h>
 
-#include "Arduino_FreeRTOS.h"
+#include "FreeRTOS.h"
 #include "task.h"
 
 /*-----------------------------------------------------------
@@ -83,7 +83,18 @@
 /* Start tasks with interrupts enabled. */
 #define portFLAGS_INT_ENABLED                   ( (StackType_t) 0x80 )
 
-#define	portSCHEDULER_ISR                       WDT_vect
+#define	portSCHEDULER_ISR                       TIMER5_COMPA_vect
+
+__attribute__((used)) const char * ISR_NAME = "ISR";
+__attribute__((used)) volatile uint8_t interruptStack[configINTERRUPT_STACK_SIZE] =
+    { 0xa5, 0xa5, 0xa5, 0xa5, 0xa5, 0xa5, 0xa5, 0xa5 };
+__attribute__((used)) volatile void * const interruptStackBase = (void*)&interruptStack[configINTERRUPT_STACK_SIZE - 1];
+__attribute__((used)) volatile uint8_t interruptStackReentryCounter = 0;
+__attribute__((used)) volatile void * userCodeStackPointer;
+__attribute__((used)) volatile uint8_t isYieldFromIsrPending;
+
+/* Define a variable to store the SREG value for critical sections */
+volatile uint8_t _sreg_store;
 
 /*-----------------------------------------------------------*/
 
@@ -487,7 +498,8 @@ void vPortEndScheduler( void )
 	/* It is unlikely that the AVR port will get stopped.  If required simply
 	disable the tick interrupt here. */
 
-	wdt_disable();	// disable Watchdog Timer
+    TIMSK5 = 0;
+	TCCR5B = 0;
 }
 /*-----------------------------------------------------------*/
 
@@ -506,38 +518,16 @@ void vPortYield( void )
 }
 /*-----------------------------------------------------------*/
 
-/*
- * Context switch function used by the tick.  This must be identical to
- * vPortYield() from the call to vTaskSwitchContext() onwards.  The only
- * difference from vPortYield() is the tick count is incremented as the
- * call comes from the tick ISR.
- */
-void vPortYieldFromTick( void ) __attribute__ ( ( hot, flatten, naked ) );
-void vPortYieldFromTick( void )
-{
-	portSAVE_CONTEXT();
-	
-	sleep_reset();		//	 reset the sleep_mode() faster than sleep_disable();
-
-	if( xTaskIncrementTick() != pdFALSE )
-	{
-		vTaskSwitchContext();
-	}
-
-	portRESTORE_CONTEXT();
-
-	__asm__ __volatile__ ( "ret" );
-}
-/*-----------------------------------------------------------*/
-
 //initialize watchdog
 void prvSetupTimerInterrupt( void )
 {
-	//reset watchdog
-	wdt_reset();
-
-	//set up WDT Interrupt (rather than the WDT Reset).
-	wdt_interrupt_enable( portUSE_WDTO );
+    TCCR5A = 0;  // Steup timer 1 interrupt to no prescale CTC mode
+    TCCR5B =  (_BV(WGM12) | portTIMER_PRESCALER);
+    TCCR5C = 0;
+    TIMSK5 = 0;
+    TCNT5 = 0;
+    OCR5A = portTIMER_PERIOD;
+    TIMSK5 |= _BV(OCIE1A); // Enable interrupt
 }
 
 /*-----------------------------------------------------------*/
@@ -552,12 +542,11 @@ void prvSetupTimerInterrupt( void )
 	 * use ISR_NOBLOCK where there is an important timer running, that should preempt the scheduler.
 	 *
 	 */
-//	ISR(portSCHEDULER_ISR, ISR_NAKED ISR_NOBLOCK) __attribute__ ((hot, flatten));
-	ISR(portSCHEDULER_ISR, ISR_NAKED) __attribute__ ((hot, flatten));
-	ISR(portSCHEDULER_ISR)
+	ISR(portSCHEDULER_ISR) __attribute__ ((hot, flatten));
+	portRTOS_ISR(portSCHEDULER_ISR)
 	{
-		vPortYieldFromTick();
-		__asm__ __volatile__ ( "reti" );
+	    sleep_reset();      //   reset the sleep_mode() faster than sleep_disable();
+        portYIELD_FROM_ISR(xTaskIncrementTick());
 	}
 
 #else
@@ -568,7 +557,7 @@ void prvSetupTimerInterrupt( void )
 	 *
 	 * use ISR_NOBLOCK where there is an important timer running, that should preempt the scheduler.
 	 */
-//	ISR(portSCHEDULER_ISR, ISR_NOBLOCK) __attribute__ ((hot, flatten));
+//	ISR(portSCHEDULER_ISR, ISR_NOBLOCK)
 	ISR(portSCHEDULER_ISR) __attribute__ ((hot, flatten));
 	ISR(portSCHEDULER_ISR)
 	{

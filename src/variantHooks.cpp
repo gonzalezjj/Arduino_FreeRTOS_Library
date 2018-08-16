@@ -71,7 +71,7 @@
 #include <Arduino.h>
 
 /* FreeRTOS includes. */
-#include "Arduino_FreeRTOS.h"
+#include "FreeRTOS.h"
 #include "task.h"
 #include "timers.h"
 
@@ -94,7 +94,7 @@ void initVariant(void)
 	vApplicationMallocFailedHook(); // Probably we've failed trying to initialise heap for the scheduler. Let someone know.
 }
 
-
+extern "C" {
 /*-----------------------------------------------------------*/
 #if ( configUSE_IDLE_HOOK == 1 )
 /*
@@ -239,5 +239,6 @@ void vApplicationStackOverflowHook( TaskHandle_t xTask __attribute__((unused)), 
 	}
 }
 
+} // extern "C"
 #endif /* configCHECK_FOR_STACK_OVERFLOW >= 1 */
 /*-----------------------------------------------------------*/

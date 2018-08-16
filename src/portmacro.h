@@ -114,93 +114,23 @@ typedef unsigned char UBaseType_t;
 /*-----------------------------------------------------------*/
 
 /* Critical section management. */
+extern volatile uint8_t _sreg_store;
 
-#define portENTER_CRITICAL()    __asm__ __volatile__ (					\
-                                        "in __tmp_reg__, __SREG__"		"\n\t"	\
-                                        "cli" 					"\n\t"	\
-                                        "push __tmp_reg__"			"\n\t"	\
-                                        ::: "memory"					\
+#define portENTER_CRITICAL()    __asm__ __volatile__ (					        \
+                                        "in %0, __SREG__"               "\n\t"  \
+                                        "cli" 					        "\n\t"	\
+                                        :"=r" (_sreg_store) :: "memory"         \
                                         )
 
 
-#define portEXIT_CRITICAL()     __asm__ __volatile__ (					\
-                                        "pop __tmp_reg__"			"\n\t"	\
-                                        "out __SREG__, __tmp_reg__" 		"\n\t"	\
-                                        ::: "memory"					\
+#define portEXIT_CRITICAL()     __asm__ __volatile__ (					        \
+                                        "out __SREG__, %0"              "\n\t"  \
+                                        :: "r"(_sreg_store) : "memory"          \
                                         )
 
 
 #define portDISABLE_INTERRUPTS()        __asm__ __volatile__ ( "cli" ::: "memory")
 #define portENABLE_INTERRUPTS()         __asm__ __volatile__ ( "sei" ::: "memory")
-
-/*-----------------------------------------------------------*/
-
-/**
-	Enable the watchdog timer, configuring it for expire after
-	(value) timeout (which is a combination of the WDP0
-	through WDP3 bits).
-
-	This function is derived from <avr/wdt.h> but enables only
-	the interrupt bit (WDIE), rather than the reset bit (WDE).
-
-	Can't find it documented but the WDT, once enabled,
-	rolls over and fires a new interrupt each time.
-
-	See also the symbolic constants WDTO_15MS et al.
-*/
-#define wdt_interrupt_enable(value)						\
-                                        __asm__ __volatile__ (				\
-                                        "in __tmp_reg__,__SREG__" "\n\t"        \
-                                        "cli" "\n\t"                            \
-                                        "wdr" "\n\t"                            \
-                                        "sts %0,%1" "\n\t"                      \
-                                        "out __SREG__,__tmp_reg__" "\n\t"       \
-                                        "sts %0,%2" "\n\t"                      \
-                                        : /* no outputs */                      \
-                                        : "M" (_SFR_MEM_ADDR(_WD_CONTROL_REG)), \
-                                        "r" (_BV(_WD_CHANGE_BIT) | _BV(WDE)),   \
-                                        "r" ((uint8_t) ((value & 0x08 ? _WD_PS3_MASK : 0x00) |   \
-                                        _BV(WDIF) | _BV(WDIE) | (value & 0x07)) )                \
-                                        : "r0"                                  \
-                                        )
-
-/*-----------------------------------------------------------*/
-/**
-	Enable the watchdog timer, configuring it for expire after
-	(value) timeout (which is a combination of the WDP0
-	through WDP3 bits).
-
-	This function is derived from <avr/wdt.h> but enables both
-	the reset bit (WDE), and the interrupt bit (WDIE).
-
-	This will ensure that if the interrupt is not serviced
-	before the second timeout, the AVR will reset.
-
-	Servicing the interrupt automatically clears it,
-	and ensures the AVR does not reset.
-
-	Can't find it documented but the WDT, once enabled,
-	rolls over and fires a new interrupt each time.
-
-	See also the symbolic constants WDTO_15MS et al.
-*/
-#define wdt_interrupt_reset_enable(value)					\
-				__asm__ __volatile__ 				\
-					"in __tmp_reg__,__SREG__" "\n\t"        \
-					"cli" "\n\t"                            \
-					"wdr" "\n\t"                            \
-					"sts %0,%1" "\n\t"                      \
-					"out __SREG__,__tmp_reg__" "\n\t"       \
-					"sts %0,%2" "\n\t"                      \
-					: /* no outputs */                      \
-					: "M" (_SFR_MEM_ADDR(_WD_CONTROL_REG)), \
-					"r" (_BV(_WD_CHANGE_BIT) | _BV(WDE)),   \
-					"r" ((uint8_t) ((value & 0x08 ? _WD_PS3_MASK : 0x00) | \
-					_BV(WDIF) | _BV(WDIE) | _BV(WDE) | (value & 0x07)) )   \
-					: "r0"                                  \
-					)
-
-/*-----------------------------------------------------------*/
 
 /* Architecture specifics. */
 #define portSTACK_GROWTH                ( -1 )
@@ -214,7 +144,7 @@ typedef unsigned char UBaseType_t;
  * but 120 kHz at 5V DC and 25 degrees is actually more accurate,
  * from data sheet.
  */
-#define portTICK_PERIOD_MS              ( (TickType_t) _BV( portUSE_WDTO + 4 ) )	// Inaccurately assuming 128 kHz Watchdog Timer.
+#define portTICK_PERIOD_MS              (1000 / configTICK_RATE_HZ)
 
 /*-----------------------------------------------------------*/
 
@@ -222,17 +152,123 @@ typedef unsigned char UBaseType_t;
 extern void vPortYield( void )          __attribute__ ( ( naked ) );
 #define portYIELD()                     vPortYield()
 
+extern volatile uint8_t isYieldFromIsrPending;
+
+#define portYIELD_FROM_ISR(flag) if (flag) { isYieldFromIsrPending = 1; }
+#define portIS_IN_ISR (interruptStackReentryCounter)
 /*-----------------------------------------------------------*/
 
 #if defined(__AVR_ATmega2560__) || defined(__AVR_ATmega2561__)
 /* Task function macros as described on the FreeRTOS.org WEB site. */
 // This changed to add .lowtext tag for the linker for ATmega2560 and ATmega2561. To make sure they are loaded in low memory.
 #define portTASK_FUNCTION_PROTO( vFunction, pvParameters ) void vFunction( void *pvParameters ) __attribute__ ((section (".lowtext")))
+#define portTASK_FUNCTION( vFunction, pvParameters ) void vFunction( void *pvParameters )
+
 #else
 #define portTASK_FUNCTION_PROTO( vFunction, pvParameters ) void vFunction( void *pvParameters )
+#define portTASK_FUNCTION( vFunction, pvParameters ) void vFunction( void *pvParameters )
+
 #endif
 
-#define portTASK_FUNCTION( vFunction, pvParameters ) void vFunction( void *pvParameters )
+extern volatile void * userCodeStackPointer;
+extern volatile void * const interruptStackBase;
+extern volatile uint8_t interruptStackReentryCounter;  // Reentry counter for nested interrupts
+
+void vApplicationStackOverflowHook( void * xTask, portCHAR *pcTaskName );
+extern const char * ISR_NAME;
+extern volatile uint8_t interruptStack[configINTERRUPT_STACK_SIZE];
+#if configCHECK_FOR_STACK_OVERFLOW > 1
+#define portCHECK_ISR_STACK_WATERMARK()                             \
+            "push XL                                        \n\t"   \
+            "push XH                                        \n\t"   \
+            "push r19                                       \n\t"   \
+            "ldi XL, lo8(interruptStack)                    \n\t"   \
+            "ldi XH, hi8(interruptStack)                    \n\t"   \
+            "ldi r19, 9                                     \n\t"   \
+            "10:                                            \n\t"   \
+            "dec r19                                        \n\t"   \
+            "breq 11f                                       \n\t"   \
+            "ld r18, X+                                     \n\t"   \
+            "cpi r18, 0xa5                                  \n\t"   \
+            "breq 10b                                       \n\t"   \
+            " /* Stack overflow detected! */                \n\t"   \
+            "ldi r24, 0                                     \n\t"   \
+            "ldi r25, 0                                     \n\t"   \
+            "lds r22, ISR_NAME                              \n\t"   \
+            "lds r23, ISR_NAME + 1                          \n\t"   \
+            "call vApplicationStackOverflowHook             \n\t"   \
+            "11:                                            \n\t"   \
+            "pop    r19                                     \n\t"   \
+            "pop    XH                                      \n\t"   \
+            "pop    XL                                      \n\t"
+//#define isrCHECK_FOR_STACK_OVERFLOW()
+#else
+#define portCHECK_ISR_STACK_WATERMARK()
+#endif
+
+#define portENTER_INTERRUPT()	\
+	__asm__ __volatile__ (                                          \
+	        " /* Push R18 and SREG */                       \n\t"   \
+            "push r18                                       \n\t"   \
+            "in r18, __SREG__                               \n\t"   \
+            "push r18                                       \n\t"   \
+	        " /* Increase the reentry counter */            \n\t"   \
+	        "lds r18, interruptStackReentryCounter          \n\t"   \
+	        "inc r18                                        \n\t"   \
+	        "sts interruptStackReentryCounter, r18          \n\t"   \
+	        " /* Check whether we need to store status */   \n\t"   \
+	        "cpi r18, 1                                     \n\t"   \
+	        "brne 0f                                        \n\t"   \
+	        " /* Save user-mode stack */                    \n\t"   \
+            "in  r18, __SP_L__                              \n\t"   \
+            "sts userCodeStackPointer, r18                  \n\t"   \
+            "in  r18, __SP_H__                              \n\t"   \
+            "sts userCodeStackPointer + 1, r18              \n\t"   \
+	        " /* Enter interrupt stack */                   \n\t"   \
+            "lds r18, interruptStackBase                    \n\t"   \
+            "out __SP_L__, r18                              \n\t"   \
+            "lds r18, interruptStackBase + 1                \n\t"   \
+            "out __SP_H__, r18                              \n\t"   \
+            "0:                                             \n\t"   \
+	::: "memory");
+
+#define portEXIT_INTERRUPT()	\
+	__asm__ __volatile__ (									        \
+	        "cli                                            \n\t"   \
+	        " /* Decrease the reentry counter */            \n\t"   \
+	        "lds r18, interruptStackReentryCounter          \n\t"   \
+	        "dec r18                                        \n\t"   \
+	        "sts interruptStackReentryCounter, r18          \n\t"   \
+	        "brne 0f                                        \n\t"   \
+	        portCHECK_ISR_STACK_WATERMARK()                         \
+	        " /* Load user-mode stack */                    \n\t"   \
+            "lds r18, userCodeStackPointer                  \n\t"   \
+            "out __SP_L__, r18                              \n\t"   \
+            "lds r18, userCodeStackPointer + 1              \n\t"   \
+            "out __SP_H__, r18                              \n\t"   \
+	        " /* Check for pending yield */                 \n\t"   \
+	        "lds r18, isYieldFromIsrPending                 \n\t"   \
+	        "cpi r18, 0                                     \n\t"   \
+	        "breq 0f                                        \n\t"   \
+	        "ldi r18, 0                                     \n\t"   \
+	        "sts isYieldFromIsrPending, r18                 \n\t"   \
+	        "call vPortYield                                \n\t"   \
+            "0:                                             \n\t"   \
+            "pop    r18                                     \n\t"   \
+            "out __SREG__, r18                              \n\t"   \
+            "pop    r18                                     \n\t"   \
+	::: "memory");
+
+#define portRTOS_ISR(_vec_name_)                                    \
+    static void __real_ ## _vec_name_();                            \
+    ISR(_vec_name_) {                                               \
+        portENTER_INTERRUPT();                                      \
+        __real_ ## _vec_name_();                                    \
+        portEXIT_INTERRUPT();                                       \
+    }                                                               \
+    static void __real_ ## _vec_name_()
+//    static void __attribute__((noinline)) __real_ ## _vec_name_()
+
 
 #ifdef __cplusplus
 }
